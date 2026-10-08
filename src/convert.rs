@@ -56,9 +56,6 @@ impl Default for Options {
 
 impl Options {
     fn kind_for(&self, class: Class) -> Result<Kind> {
-        if self.preset == "parity" {
-            return Ok(Kind::F32);
-        }
         let preset = match class {
             Class::StaticF32 => Kind::F32,
             Class::Router => match self.preset.as_str() {
