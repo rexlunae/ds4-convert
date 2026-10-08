@@ -12,7 +12,7 @@ fn main() {
         .unwrap();
     let mut cursor = std::io::Cursor::new(&bytes[..]);
     let qt = content.tensor(&mut cursor, &tensor, &Device::Cpu).unwrap();
-    let vals = qt.dequantize(&Device::Cpu).unwrap().to_vec1::<f32>().unwrap();
+    let vals = qt.dequantize(&Device::Cpu).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
     let finite = vals.iter().filter(|v| v.is_finite()).count();
     let mx = vals.iter().cloned().fold(0.0f32, f32::max);
     let mn = vals.iter().cloned().fold(0.0f32, f32::min);
