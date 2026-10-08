@@ -139,12 +139,26 @@ impl Model {
 
         let mut files = Vec::new();
         let mut tensors = HashMap::new();
-        for (idx, sp) in shard_paths.iter().enumerate() {
-            let (_, hdr) = parse_header(sp)?;
+        let mut skipped_shards = 0usize;
+        for sp in &shard_paths {
+            // A present-but-corrupt shard (e.g. a 15-byte 404 body downloaded
+            // for a pruned shard) is skipped with a warning, not fatal.
+            let (_, hdr) = match parse_header(sp) {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("warning: skipping unparseable shard {}: {e}", sp.display());
+                    skipped_shards += 1;
+                    continue;
+                }
+            };
+            let idx = files.len();
             files.push(std::fs::File::open(sp)?);
             for (name, (dtype, shape, start, end)) in hdr {
                 tensors.insert(name, (idx, TensorMeta { dtype, shape, start, end }));
             }
+        }
+        if skipped_shards > 0 {
+            eprintln!("note: {skipped_shards} shard(s) skipped as unparseable");
         }
         if let Some(wm) = if weight_map.is_empty() { None } else { Some(weight_map) } {
             // Sharded: restrict to tensors the index actually references.
