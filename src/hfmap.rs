@@ -42,13 +42,20 @@ impl Config {
                 .or_else(|| get(k).as_f64().map(|f| f as i64))
                 .ok_or_else(|| anyhow!("config.json: missing numeric field {k:?}"))
         };
-        let model_type = get("model_type").as_str().unwrap_or("").to_string();
-        let arch: &'static str = if model_type == "deepseek_v41" {
-            "deepseek41"
-        } else if model_type == "deepseek_v4" {
-            "deepseek4"
-        } else {
-            bail!("config.json: model_type {model_type:?} is not deepseek_v4 / deepseek_v41");
+        // Arch comes from the TOP-LEVEL model_type: the text_config's own
+        // model_type ("deepseek_v41_text") is a submodule tag and must not
+        // shadow it.  Accept the submodule spellings defensively.
+        let model_type = v
+            .get("model_type")
+            .and_then(|m| m.as_str())
+            .unwrap_or("")
+            .to_string();
+        let arch: &'static str = match model_type.as_str() {
+            "deepseek_v41" | "deepseek_v41_text" => "deepseek41",
+            "deepseek_v4" | "deepseek_v4_text" => "deepseek4",
+            other => {
+                bail!("config.json: model_type {other:?} is not deepseek_v4 / deepseek_v41")
+            }
         };
         let engram_layer_ids: Vec<usize> = match get("engram_layer_ids").as_array() {
             Some(a) => a.iter().filter_map(|x| x.as_i64()).map(|x| x as usize).collect(),
