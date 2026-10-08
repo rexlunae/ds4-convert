@@ -20,7 +20,7 @@ const Q_LORA: usize = 8;
 const O_GROUPS: usize = 2;
 const O_LORA: usize = 4;
 const NE: usize = 8;
-const NFE: usize = 128;
+const NFE: usize = 256;
 const NUSED: usize = 2;
 const N_SHARED: usize = 1;
 const HC: usize = 2;
@@ -413,6 +413,11 @@ fn main() {
             token_map: Some(hf_dir.join("token_map.bin")),
             multipliers: Some(hf_dir.join("engram_constants.json")),
             engram_constants: Some(hf_dir.join("engram_constants.json")),
+            // The tiny fixture's indexer tensors (16x16) are smaller than any
+            // block format; the real model's equivalents are block-aligned.
+            overrides: [("dense", Kind::F32), ("engram-table", Kind::F32)]
+                .into_iter()
+                .collect(),
             ..Options::default()
         };
         convert::run(&hf_dir, &converted_k, &opts).unwrap();
