@@ -33,7 +33,7 @@ fn main() {
     ds4_convert::quant::decode(ds4_convert::quant::Kind::Q2K, 256, &bytes, &mut mine).unwrap();
     let n_diff = candle_vals.iter().zip(&mine).filter(|(a, b)| (**a - **b).abs() > 1e-6).count();
     // candle's own encoder on the same vals: byte-diff against mine
-    let src_t = candle_core::Tensor::from_vec(vals.clone(), dims, &Device::Cpu).unwrap();
+    let src_t = candle_core::Tensor::from_vec(vals.clone(), (dims[0], dims[1]), &Device::Cpu).unwrap();
     let candle_qt = candle_core::quantized::QTensor::quantize(&src_t, candle_core::quantized::GgmlDType::Q2K).unwrap();
     let cbytes = candle_qt.data().unwrap();
     let mut first_diffs: Vec<(usize, u8, u8)> = Vec::new();
