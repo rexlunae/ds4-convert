@@ -70,6 +70,7 @@ impl Options {
                 "size" => Kind::Q4K,
                 "parity" => Kind::F32,
                 _ => Kind::Q8_0,
+            },
             Class::Down => match self.preset.as_str() {
                 "size" => Kind::Q2K,
                 "parity" => Kind::F32,
