@@ -445,6 +445,10 @@ fn main() {
                         ("router", Kind::F16),
                         ("hc", Kind::F16),
                         ("engram-qk", Kind::Q2K),
+                        // Tiny-fixture geometry: the 16x16 indexer tensors are
+                        // smaller than any block format (the real model's are
+                        // block-aligned).
+                        ("static", Kind::F32),
                     ],
                 ),
             ),
