@@ -208,13 +208,29 @@ pub fn load_tokenizer(dir: &std::path::Path, unk_id: i64, cfg: &Config) -> Resul
         .and_then(|m| m.get("vocab"))
         .and_then(|v| v.as_object())
         .ok_or_else(|| anyhow!("tokenizer.json: no model.vocab"))?;
-    let mut pairs: Vec<(usize, &str)> = vocab
+    // Base vocab + added_tokens form the full id space: the official file
+    // has 128 000 base entries and 1 283 added tokens (ids 0..129 279;
+    // three ids are shared with base rows by content), totaling the
+    // model's 129 280 rows. An added token replaces a base entry with the
+    // same id (HF's load order).
+    let mut pairs: Vec<(usize, String)> = vocab
         .iter()
-        .filter_map(|(t, id)| id.as_u64().map(|id| (id as usize, t.as_str())))
+        .filter_map(|(t, id)| id.as_u64().map(|id| (id as usize, t.to_string())))
         .collect();
+    if let Some(added) = tj.get("added_tokens").and_then(|a| a.as_array()) {
+        for t in added {
+            if let (Some(id), Some(c)) = (
+                t.get("id").and_then(|i| i.as_u64()),
+                t.get("content").and_then(|c| c.as_str()),
+            ) {
+                pairs.retain(|(i, _)| *i != id as usize);
+                pairs.push((id as usize, c.to_string()));
+            }
+        }
+    }
     pairs.sort();
     let n = pairs.len();
-    let tokens: Vec<String> = pairs.iter().map(|(i, t)| (*t).to_string()).collect();
+    let tokens: Vec<String> = pairs.iter().map(|(i, t)| t.clone()).collect();
 
     let mut specials: std::collections::HashMap<i64, bool> = std::collections::HashMap::new();
     if let Some(added) = tj.get("added_tokens").and_then(|a| a.as_array()) {
