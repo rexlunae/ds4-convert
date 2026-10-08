@@ -436,9 +436,11 @@ fn main() {
                 overridden(
                     all_f32.clone(),
                     [
+                        // (dense stays F32 here: the tiny fixture's 16x16
+                        // indexer tensors are smaller than any block format,
+                        // unlike the real model's aligned dense tensors)
                         ("embd", Kind::F16),
                         ("head", Kind::Q8_0),
-                        ("dense", Kind::Q8_0),
                         ("experts", Kind::Q4K),
                         ("down", Kind::Q4K),
                         ("shexp-down", Kind::Q8_0),
