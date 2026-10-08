@@ -128,13 +128,16 @@ fn tiny_model() -> Vec<(String, D, Vec<f32>, Vec<usize>)> {
 fn enc(d: D, dims: &[usize], v: &[f32]) -> Vec<u8> {
     match d {
         D::F32 => quant::encode(Kind::F32, dims, v).unwrap().1,
-        D::F16 => quant::encode(Kind::F16, dims, v).unwrap().1,
+        // The direct reference file is stored as F32 throughout: comparing
+        // F16 storage against F32 storage measures the matmul kernel's
+        // f16-vs-f32 rounding (machine-specific), not the converter.
+        D::F16 => quant::encode(Kind::F32, dims, v).unwrap().1,
     }
 }
 
 fn dtype_name(d: D) -> &'static str {
     match d {
-        D::F16 => "F16",
+        D::F16 => "F32",
         D::F32 => "F32",
     }
 }
