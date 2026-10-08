@@ -50,7 +50,12 @@ pub fn f32_from_fp8_e4m3(b: u8) -> f32 {
     let sign = (b >> 7) as f32 * -2.0 + 1.0; // 0 → 1.0, 1 → -1.0
     let e = (b >> 3) & 0xF;
     let m = b & 0x7;
-    if e == 15 && m != 0 {
+    // E4M3FN (the torch/llama.cpp checkpoint format): e15 is a NORMAL
+    // exponent (values 256..448); only S1111_111 (0x7F) is NaN. The
+    // IEEE-style rule (NaN for every e15 with a nonzero mantissa) decoded
+    // thousands of real weights as NaN, which the encoders then silently
+    // zeroed (f32::max skips NaN; NaN casts to 0).
+    if e == 15 && m == 7 {
         return f32::NAN;
     }
     let mag = if e == 0 {
