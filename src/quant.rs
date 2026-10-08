@@ -220,8 +220,6 @@ pub fn encode(kind: Kind, dims: &[usize], vals: &[f32]) -> Result<(u32, Vec<u8>)
                     }
                     dmin = max_min / 15.0;
                 }
-                out.extend_from_slice(&f16_bytes(d));
-                out.extend_from_slice(&f16_bytes(dmin));
                 let mut big_l = [0u8; QK_K];
                 for j in 0..16 {
                     let dd = d * (scales[j] & 0xF) as f32;
@@ -242,8 +240,14 @@ pub fn encode(kind: Kind, dims: &[usize], vals: &[f32]) -> Result<(u32, Vec<u8>)
                             | (big_l[j + ll + 96] << 6);
                     }
                 }
+                // ggml's Q2_K disk layout is [scales[16], qs[64], d(2), dmin(2)]
+                // — scales FIRST, d/dmin LAST (unlike Q4_K's [d, dmin, scales,
+                // qs]). The original port had [d, dmin, scales, qs], which is
+                // self-consistent with its own decoder but garbage for candle.
                 out.extend_from_slice(&scales);
                 out.extend_from_slice(&qs);
+                out.extend_from_slice(&f16_bytes(d));
+                out.extend_from_slice(&f16_bytes(dmin));
             }
             (10, out)
         }
@@ -342,10 +346,11 @@ pub fn decode(kind: Kind, cols: usize, bytes: &[u8], out: &mut Vec<f32>) -> Resu
         }
         Kind::Q2K => {
             for blk in bytes.chunks_exact(84) {
-                let d = half::f16::from_le_bytes(blk[0..2].try_into().unwrap()).to_f32();
-                let dmin = half::f16::from_le_bytes(blk[2..4].try_into().unwrap()).to_f32();
-                let scales: [u8; 16] = blk[4..20].try_into().unwrap();
-                let qs_all = &blk[20..];
+                // ggml Q2_K disk layout: [scales[16], qs[64], d(2), dmin(2)].
+                let scales: [u8; 16] = blk[0..16].try_into().unwrap();
+                let qs_all = &blk[16..80];
+                let d = half::f16::from_le_bytes(blk[80..82].try_into().unwrap()).to_f32();
+                let dmin = half::f16::from_le_bytes(blk[82..84].try_into().unwrap()).to_f32();
                 let mut chunk_out = [0f32; QK_K];
                 let mut is = 0usize;
                 for (qs, y_chunk) in qs_all.chunks_exact(32).zip(chunk_out.chunks_exact_mut(128)) {
