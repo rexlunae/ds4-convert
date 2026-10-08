@@ -436,12 +436,14 @@ fn main() {
                 overridden(
                     all_f32.clone(),
                     [
-                        ("embd", Kind::Q2K),
+                        ("embd", Kind::F16),
                         ("head", Kind::Q8_0),
-                        ("experts", Kind::Q2K),
+                        ("dense", Kind::Q8_0),
+                        ("experts", Kind::Q4K),
                         ("down", Kind::Q4K),
-                        ("router", Kind::BF16),
-                        ("hc", Kind::Q2K),
+                        ("shexp-down", Kind::Q8_0),
+                        ("router", Kind::F16),
+                        ("hc", Kind::F16),
                         ("engram-qk", Kind::Q2K),
                     ],
                 ),

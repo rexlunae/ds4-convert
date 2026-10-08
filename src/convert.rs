@@ -18,6 +18,7 @@ enum Class {
     Head,
     Dense,
     Down,
+    ShexpDown,
     Experts,
     Router,
     HcFn,
@@ -56,15 +57,21 @@ impl Default for Options {
 
 impl Options {
     fn kind_for(&self, class: Class) -> Result<Kind> {
+        // Preset grades follow the proven-good published DeepSeek-V4-Flash
+        // Q2_K mix: dense attention and shared-expert paths at Q8_0, the
+        // precision-critical router/compressor/indexer/hc/embedding paths at
+        // F16, and only the big expert stacks aggressively quantized.  The
+        // earlier all-Q2_K preset passed the tiny fixture but wrecked the
+        // real model's coherence (flat logits, token salad).
         let preset = match class {
             Class::StaticF32 => Kind::F32,
             Class::Router => match self.preset.as_str() {
                 "parity" => Kind::F32,
-                _ => Kind::BF16,
+                _ => Kind::F16,
             },
             Class::Embd => match self.preset.as_str() {
                 "parity" => Kind::F32,
-                _ => Kind::Q2K,
+                _ => Kind::F16,
             },
             Class::Head => match self.preset.as_str() {
                 "size" => Kind::Q4K,
@@ -76,18 +83,30 @@ impl Options {
                 "parity" => Kind::F32,
                 _ => Kind::Q4K,
             },
-            Class::Dense | Class::Experts | Class::HcFn | Class::EngramTable | Class::EngramQk => {
-                match self.preset.as_str() {
-                    "parity" => Kind::F32,
-                    _ => Kind::Q2K,
-                }
-            }
+            Class::ShexpDown => match self.preset.as_str() {
+                "size" => Kind::Q2K,
+                "parity" => Kind::F32,
+                _ => Kind::Q8_0,
+            },
+            Class::Dense | Class::Experts => match self.preset.as_str() {
+                "parity" => Kind::F32,
+                "size" => Kind::Q2K,
+                _ => match class {
+                    Class::Dense => Kind::Q8_0,
+                    _ => Kind::Q4K,
+                },
+            },
+            Class::HcFn | Class::EngramTable | Class::EngramQk => match self.preset.as_str() {
+                "parity" => Kind::F32,
+                _ => Kind::F16,
+            },
         };
         let slot: &'static str = match class {
             Class::Embd => "embd",
             Class::Head => "head",
             Class::Dense => "dense",
             Class::Down => "down",
+            Class::ShexpDown => "shexp-down",
             Class::Experts => "experts",
             Class::Router => "router",
             Class::HcFn => "hc",
@@ -112,7 +131,9 @@ fn classify_out(name: &str) -> Class {
         Class::Embd
     } else if name == "output.weight" {
         Class::Head
-    } else if name.ends_with("down_exps.weight") || name.ends_with("down_shexp.weight") {
+    } else if name.ends_with("down_shexp.weight") {
+        Class::ShexpDown
+    } else if name.ends_with("down_exps.weight") {
         Class::Down
     } else if name.ends_with("gate_exps.weight") || name.ends_with("up_exps.weight") || name.ends_with("gate_shexp.weight") || name.ends_with("up_shexp.weight") {
         Class::Experts
