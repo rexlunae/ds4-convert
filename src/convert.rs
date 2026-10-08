@@ -468,37 +468,58 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
         sorted.sort_by_key(|(eid, _)| *eid);
         let class = if which == 2 { Class::Down } else { Class::Experts };
         let kind = opts.kind_for(class)?;
-        for (_eid, name) in &sorted {
-            let m = model.meta(name)?.clone();
-            let rows = m.shape[0];
-            let logical = if m.dtype == StDType::I8 { m.shape[1] * 2 } else { m.shape[1] };
-            let sb_name = name.replace(".weight", ".scale");
-            let has_scale = model.has(&sb_name);
-            let (srows, scols) = if has_scale {
-                let sm = model.meta(&sb_name)?;
-                (sm.shape[0], *sm.shape.last().unwrap())
-            } else {
-                (0, 0)
-            };
-            if has_scale && (srows != rows || logical % scols != 0) {
-                bail!("{name}: scale ({srows}, {scols}) does not tile ({rows}, {logical})");
+        // IO sequential, CPU parallel: reads are cheap (5.9 MB/expert), the
+        // k-quant encode is the cost. Encode batches of experts across
+        // threads, then push their bytes in expert order.
+        const BATCH: usize = 16;
+        for batch in sorted.chunks(BATCH) {
+            let mut batch_vals: Vec<(usize, usize, Vec<f32>)> = Vec::with_capacity(batch.len());
+            for (_eid, name) in batch {
+                let m = model.meta(name)?.clone();
+                let rows = m.shape[0];
+                let logical = if m.dtype == StDType::I8 { m.shape[1] * 2 } else { m.shape[1] };
+                let sb_name = name.replace(".weight", ".scale");
+                let has_scale = model.has(&sb_name);
+                let (srows, scols) = if has_scale {
+                    let sm = model.meta(&sb_name)?;
+                    (sm.shape[0], *sm.shape.last().unwrap())
+                } else {
+                    (0, 0)
+                };
+                if has_scale && (srows != rows || logical % scols != 0) {
+                    bail!("{name}: scale ({srows}, {scols}) does not tile ({rows}, {logical})");
+                }
+                let (_dt, _, wb) = model.read_tensor(name)?;
+                let (_, _, sb) = if has_scale {
+                    model.read_tensor(&sb_name)?
+                } else {
+                    (StDType::F8E8M0, vec![], Vec::new())
+                };
+                let vals = dequant_chunk(
+                    m.dtype,
+                    &wb,
+                    rows,
+                    logical,
+                    if has_scale { Some((&sb, srows, scols, rows / srows, logical / scols, 0)) } else { None },
+                    opts.fp4_high_first,
+                )?;
+                batch_vals.push((rows, logical, vals));
             }
-            let (_dt, _, wb) = model.read_tensor(name)?;
-            let (_, _, sb) = if has_scale {
-                model.read_tensor(&sb_name)?
-            } else {
-                (StDType::F8E8M0, vec![], Vec::new())
-            };
-            let vals = dequant_chunk(
-                m.dtype,
-                &wb,
-                rows,
-                logical,
-                if has_scale { Some((&sb, srows, scols, rows / srows, logical / scols, 0)) } else { None },
-                opts.fp4_high_first,
-            )?;
-            let (_id, bytes) = crate::quant::encode(kind, &[rows, logical], &vals)?;
-            w.push(&bytes)?;
+            let results: Vec<_> = std::thread::scope(|s| {
+                batch_vals
+                    .iter()
+                    .map(|(rows, logical, vals)| {
+                        s.spawn(move || crate::quant::encode(kind, &[*rows, *logical], vals))
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|h| h.join().expect("encode thread panicked"))
+                    .collect()
+            });
+            for res in results {
+                let (_id, bytes) = res?;
+                w.push(&bytes)?;
+            }
         }
         done += 1;
     }
