@@ -429,7 +429,10 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
         let kind = kind_of[done];
         let m = model.meta(hf)?.clone();
         let class = classify_out(gname);
-        let is_stack = class == Class::Experts || class == Class::Down;
+        // Stackedness is a property of the tensor NAME: the *_exps tensors
+        // are the per-expert stacks (emitted by the stack loop); shared
+        // experts (*/shexp) are plain 2-D tensors in the direct path.
+        let is_stack = gname.ends_with("_exps.weight");
         let cols = *m.shape.last().ok_or_else(|| anyhow!("{hf}: empty"))?;
         let rows = m.shape[0];
         let fp4 = m.dtype == StDType::I8;
