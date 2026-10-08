@@ -32,6 +32,21 @@ fn main() {
     let mut mine = Vec::new();
     ds4_convert::quant::decode(ds4_convert::quant::Kind::Q2K, 256, &bytes, &mut mine).unwrap();
     let n_diff = candle_vals.iter().zip(&mine).filter(|(a, b)| (**a - **b).abs() > 1e-6).count();
+    // candle's own encoder on the same vals: byte-diff against mine
+    let src_t = candle_core::Tensor::from_vec(vals.clone(), dims, &Device::Cpu).unwrap();
+    let candle_qt = candle_core::quantized::QTensor::quantize(&src_t, candle_core::quantized::GgmlDType::Q2K).unwrap();
+    let cbytes = candle_qt.data().unwrap();
+    let mut first_diffs: Vec<(usize, u8, u8)> = Vec::new();
+    for (i, (a, b)) in cbytes.iter().zip(bytes.iter()).enumerate() {
+        if a != b {
+            if first_diffs.len() < 8 {
+                first_diffs.push((i, *a, *b));
+            }
+        }
+    }
+    println!("byte diffs: {} of {} (first: {:?})", first_diffs.len() + 0, cbytes.len(), first_diffs.iter().take(4).map(|(i, a, b)| (i, a, b)).collect::<Vec<_>>());
+    println!("candle-enc [0..12 bytes]: {:?}", &cbytes[..12.min(cbytes.len())]);
+    println!("mine-enc    [0..12 bytes]: {:?}", &bytes[..12.min(bytes.len())]);
     println!("candle[0..8]: {:?}", &candle_vals[..8]);
     println!("mine  [0..8]: {:?}", &mine[..8]);
     println!("expected  [0..4]: {:?}", &vals[..4]);
