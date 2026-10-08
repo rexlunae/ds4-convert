@@ -1,0 +1,23 @@
+[package]
+name = "ds4-convert"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Convert DeepSeek-V4 / V4.1-Flash safetensors checkpoints to deepseek4 / deepseek41 GGUF for the joshua engine"
+repository = "https://github.com/rexlunae/ds4-convert"
+rust-version = "1.85"
+keywords = ["gguf", "deepseek", "safetensors", "llm", "converter"]
+categories = ["science"]
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+half = "2"
+
+[lib]
+name = "ds4_convert"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ds4-convert"
+path = "src/main.rs"
