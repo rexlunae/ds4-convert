@@ -207,7 +207,7 @@ fn write_direct_gguf(path: &std::path::Path) {
             TPlan {
                 name: name.clone(),
                 dims: dims.iter().map(|&x| x as u64).collect(),
-                dtype_id: if *d == D::F32 { 0 } else { 1 },
+                dtype_id: 0, // enc() stores everything as F32 now
                 nbytes: bytes.len() as u64,
             }
         })
