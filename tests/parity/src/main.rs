@@ -388,6 +388,7 @@ fn main() {
     let summary = convert::run(&hf_dir, &converted, &opts).unwrap();
     println!("converted: {} tensors, {} bytes", summary.tensors_out, summary.bytes_out);
 
+    let tokens: [u32; 14] = [1, 4, 2, 7, 5, 9, 3, 6, 8, 4, 1, 12, 13, 5];
     // Arm 1: lossless F32 preset - exact parity.
     {
         let mut a = load_with_joshua(&direct_gguf);
