@@ -137,7 +137,7 @@ fn classify_out(name: &str) -> Class {
         Class::Down
     } else if name.ends_with("gate_exps.weight") || name.ends_with("up_exps.weight") || name.ends_with("gate_shexp.weight") || name.ends_with("up_shexp.weight") {
         Class::Experts
-    } else if name == "ffn_gate_inp.weight" {
+    } else if name.ends_with("ffn_gate_inp.weight") {
         Class::Router
     } else if name.ends_with("hc_attn_fn.weight") || name.ends_with("hc_ffn_fn.weight") {
         Class::HcFn
