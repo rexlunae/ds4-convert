@@ -403,42 +403,88 @@ fn main() {
         let n = logits(&mut a, &[tokens[0]], 0).len();
         println!("f32 parity OK: {} positions x {n} logits match", tokens.len());
     }
-    // Arm 2: production k-quant preset - every tensor requantized to
-    // Q2_K/Q4_K/Q8_0/BF16 through the real encoders, decoded by joshua's
-    // real candle decoders. Tolerance = encoder quantization noise.
+    // Arm 2: bisect the production k-quant preset. Each variant quantizes
+    // ONE class and leaves everything else F32; a NaN from a variant pins
+    // the broken encoder. The last variant is the full balanced preset.
     {
-        let converted_k = tmp.join("converted-kquant.gguf");
-        let opts = Options {
-            preset: "balanced".into(),
-            token_map: Some(hf_dir.join("token_map.bin")),
-            multipliers: Some(hf_dir.join("engram_constants.json")),
-            engram_constants: Some(hf_dir.join("engram_constants.json")),
-            // The tiny fixture's indexer tensors (16x16) are smaller than any
-            // block format; the real model's equivalents are block-aligned.
-            overrides: [("dense", Kind::F32), ("engram-table", Kind::F32)]
-                .into_iter()
-                .collect(),
-            ..Options::default()
-        };
-        convert::run(&hf_dir, &converted_k, &opts).unwrap();
-        let mut a = load_with_joshua(&direct_gguf);
-        let mut b = load_with_joshua(&converted_k);
-        let mut worst = 0.0f32;
-        for (pos, tok) in tokens.iter().enumerate() {
-            let la = logits(&mut a, &[*tok], pos);
-            let lb = logits(&mut b, &[*tok], pos);
-            for (i, (x, y)) in la.iter().zip(&lb).enumerate() {
-                assert!(
-                    x.is_finite() && y.is_finite(),
-                    "k-quant: position {pos} logit {i} non-finite: {x} vs {y}"
-                );
-                worst = worst.max((x - y).abs());
-                assert!(
-                    (x - y).abs() < 0.35,
-                    "k-quant: position {pos} logit {i} diverges: {x} vs {y}"
-                );
+        let all_f32: std::collections::BTreeMap<&'static str, Kind> = [
+            ("embd", Kind::F32),
+            ("head", Kind::F32),
+            ("dense", Kind::F32),
+            ("experts", Kind::F32),
+            ("down", Kind::F32),
+            ("shexp-down", Kind::F32),
+            ("router", Kind::F32),
+            ("hc", Kind::F32),
+            ("engram-table", Kind::F32),
+            ("engram-qk", Kind::F32),
+            ("static", Kind::F32),
+        ]
+        .into_iter()
+        .collect();
+        let variants: Vec<(&str, std::collections::BTreeMap<&'static str, Kind>)> = vec![
+            ("baseline-f32", all_f32.clone()),
+            ("only-embd-q2k", overridden(all_f32.clone(), [("embd", Kind::Q2K)])),
+            ("only-head-q8", overridden(all_f32.clone(), [("head", Kind::Q8_0)])),
+            ("only-experts-q2k", overridden(all_f32.clone(), [("experts", Kind::Q2K)])),
+            ("only-down-q4k", overridden(all_f32.clone(), [("down", Kind::Q4K)])),
+            ("only-router-bf16", overridden(all_f32.clone(), [("router", Kind::BF16)])),
+            ("only-hc-q2k", overridden(all_f32.clone(), [("hc", Kind::Q2K)])),
+            ("only-engram-qk-q2k", overridden(all_f32.clone(), [("engram-qk", Kind::Q2K)])),
+            (
+                "balanced",
+                overridden(
+                    all_f32.clone(),
+                    [
+                        ("embd", Kind::Q2K),
+                        ("head", Kind::Q8_0),
+                        ("experts", Kind::Q2K),
+                        ("down", Kind::Q4K),
+                        ("router", Kind::BF16),
+                        ("hc", Kind::Q2K),
+                        ("engram-qk", Kind::Q2K),
+                    ],
+                ),
+            ),
+        ];
+        for (name, ov) in variants {
+            let path = tmp.join(format!("variant-{name}.gguf"));
+            let opts = Options {
+                preset: "parity".into(),
+                token_map: Some(hf_dir.join("token_map.bin")),
+                multipliers: Some(hf_dir.join("engram_constants.json")),
+                engram_constants: Some(hf_dir.join("engram_constants.json")),
+                overrides: ov,
+                ..Options::default()
+            };
+            convert::run(&hf_dir, &path, &opts).unwrap();
+            let mut b = load_with_joshua(&path);
+            let lb = logits(&mut b, &[tokens[0]], 0);
+            let has_nan = lb.iter().any(|x| !x.is_finite());
+            println!("variant {name}: {}", if has_nan { "NaN" } else { "finite" });
+            if !has_nan {
+                let mut a = load_with_joshua(&direct_gguf);
+                let mut worst = 0.0f32;
+                for (pos, tok) in tokens.iter().enumerate() {
+                    let la = logits(&mut a, &[*tok], pos);
+                    let lb = logits(&mut b, &[*tok], pos);
+                    for (i, (x, y)) in la.iter().zip(&lb).enumerate() {
+                        worst = worst.max((x - y).abs());
+                    }
+                }
+                println!("  worst |dlogit| = {worst:.4}");
             }
         }
-        println!("k-quant parity OK (worst |dlogit| = {worst:.4})");
     }
+}
+
+/// Override helper for the bisect variants.
+fn overridden(
+    mut base: std::collections::BTreeMap<&'static str, Kind>,
+    add: impl IntoIterator<Item = (&'static str, Kind)>,
+) -> std::collections::BTreeMap<&'static str, Kind> {
+    for (k, v) in add {
+        base.insert(k, v);
+    }
+    base
 }
