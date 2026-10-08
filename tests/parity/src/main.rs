@@ -64,7 +64,7 @@ enum D {
 }
 
 /// The tiny v41 model, in the fixture's exact tensor-creation order.
-fn tiny_model() -> Vec<(String, D, Vec<f32>, Vec<usize>)> {
+fn tiny_model(with_engram: bool) -> Vec<(String, D, Vec<f32>, Vec<usize>)> {
     let mut g = Gen { seed: 10, norm_seed: 500 };
     let mut t: Vec<(String, D, Vec<f32>, Vec<usize>)> = Vec::new();
     t.push(("token_embd.weight".into(), D::F16, weights(VOCAB * EMB, 1), vec![VOCAB, EMB]));
@@ -96,7 +96,7 @@ fn tiny_model() -> Vec<(String, D, Vec<f32>, Vec<usize>)> {
             t.push((format!("{p}.indexer.proj.weight"), D::F16, g.next(INDEX_NHEAD * EMB), vec![INDEX_NHEAD, EMB]));
             t.push((format!("{p}.indexer.attn_q_b.weight"), D::F16, g.next(INDEX_NHEAD * INDEX_HD * Q_LORA), vec![INDEX_NHEAD * INDEX_HD, Q_LORA]));
         }
-        if i == 1 {
+        if with_engram && i == 1 {
             t.push((format!("{p}.engram_embd.weight"), D::F16, g.next(ENGRAM_ROWS * ENGRAM_KEY), vec![ENGRAM_ROWS, ENGRAM_KEY]));
             t.push((format!("{p}.engram_wkv.weight"), D::F16, g.next((HC + 1) * EMB * 4 * ENGRAM_KEY), vec![(HC + 1) * EMB, 4 * ENGRAM_KEY]));
             t.push((format!("{p}.engram_q.weight"), D::F32, g.ones(HC * EMB), vec![HC, EMB]));
@@ -142,7 +142,7 @@ fn dtype_name(d: D) -> &'static str {
     }
 }
 
-fn tiny_metadata() -> Vec<(String, V)> {
+fn tiny_metadata(with_engram: bool) -> Vec<(String, V)> {
     let a = "deepseek41";
     let key = |s: &str| format!("{a}.{s}");
     let mut md: Vec<(String, V)> = vec![
@@ -181,25 +181,27 @@ fn tiny_metadata() -> Vec<(String, V)> {
         (key("attention.indexer.key_length"), V::U32(INDEX_HD as u32)),
         (key("attention.indexer.top_k"), V::U32(2)),
         (key("attention.compress_rope_freq_base"), V::F32(40_000.0)),
-        (key("engram.layer_ids"), V::Arr(vec![V::I32(1)])),
-        (key("engram.head_count"), V::U32(2)),
-        (key("engram.key_length"), V::U32(ENGRAM_KEY as u32)),
-        (key("engram.max_ngram_size"), V::U32(3)),
-        (key("engram.multipliers"), V::Arr(vec![V::U64(1_000_003), V::U64(2_000_029), V::U64(3_000_017)])),
-        (key("engram.primes"), V::Arr(ENGRAM_PRIMES.iter().map(|&p| V::U64(p)).collect())),
-        (key("engram.offsets"), V::Arr({
+    ];
+    if with_engram {
+        md.push((key("engram.layer_ids"), V::Arr(vec![V::I32(1)])));
+        md.push((key("engram.head_count"), V::U32(2)));
+        md.push((key("engram.key_length"), V::U32(ENGRAM_KEY as u32)));
+        md.push((key("engram.max_ngram_size"), V::U32(3)));
+        md.push((key("engram.multipliers"), V::Arr(vec![V::U64(1_000_003), V::U64(2_000_029), V::U64(3_000_017)])));
+        md.push((key("engram.primes"), V::Arr(ENGRAM_PRIMES.iter().map(|&p| V::U64(p)).collect())));
+        md.push((key("engram.offsets"), V::Arr({
             let mut acc = 0u64;
             ENGRAM_PRIMES.iter().map(|&p| { let o = acc; acc += p; V::U64(o) }).collect()
-        })),
-        (key("engram.token_map"), V::Arr((0..VOCAB as i32).map(|t| V::I32(if t < 4 { t } else { 4 + (t - 4) / 2 })).collect())),
-        (key("engram.pad_id"), V::U32(2)),
-    ];
+        })));
+        md.push((key("engram.token_map"), V::Arr((0..VOCAB as i32).map(|t| V::I32(if t < 4 { t } else { 4 + (t - 4) / 2 })).collect())));
+        md.push((key("engram.pad_id"), V::U32(2)));
+    }
     md
 }
 
-fn write_direct_gguf(path: &std::path::Path) {
-    let tensors = tiny_model();
-    let md = tiny_metadata();
+fn write_direct_gguf(path: &std::path::Path, with_engram: bool) {
+    let tensors = tiny_model(with_engram);
+    let md = tiny_metadata(with_engram);
     let plan: Vec<TPlan> = tensors
         .iter()
         .map(|(name, d, v, dims)| {
@@ -222,9 +224,9 @@ fn write_direct_gguf(path: &std::path::Path) {
 }
 
 /// HF-layout safetensors repo for the same model (per-expert tensors).
-fn write_hf_repo(dir: &std::path::Path) {
+fn write_hf_repo(dir: &std::path::Path, with_engram: bool) {
     std::fs::create_dir_all(dir).unwrap();
-    let tensors = tiny_model();
+    let tensors = tiny_model(with_engram);
     let mut header: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     let mut body: Vec<u8> = Vec::new();
     let mut offset = 0u64;
@@ -326,28 +328,36 @@ fn write_hf_repo(dir: &std::path::Path) {
             "compress_ratios": [2, 2, 1, 0], "compress_rope_theta": 40000,
             "index_n_heads": INDEX_NHEAD, "index_head_dim": INDEX_HD, "index_topk": 2,
             "hc_mult": HC, "hc_sinkhorn_iters": 2, "hc_eps": 1e-6,
-            "engram_layer_ids": [1], "engram_n_heads": 2, "engram_head_dim": ENGRAM_KEY,
-            "engram_max_ngram_size": 3, "engram_pad_token_id": 2,
             "pad_token_id": 2, "bos_token_id": 3, "eos_token_id": 3
         }
     });
-    std::fs::write(dir.join("config.json"), serde_json::to_string_pretty(&config).unwrap()).unwrap();
-    std::fs::write(
-        dir.join("engram_constants.json"),
-        serde_json::json!({
-            "multipliers": [1_000_003u64, 2_000_029, 3_000_017],
-            "primes": ENGRAM_PRIMES,
-            "offsets": engram_offsets
-        })
-        .to_string(),
-    )
-    .unwrap();
-    let mut tb = Vec::new();
-    for t in 0..VOCAB as i32 {
-        let x = if t < 4 { t } else { 4 + (t - 4) / 2 };
-        tb.extend_from_slice(&x.to_le_bytes());
+    let mut config = config;
+    if with_engram {
+        config["engram_layer_ids"] = serde_json::json!([1]);
+        config["engram_n_heads"] = serde_json::json!(2);
+        config["engram_head_dim"] = serde_json::json!(ENGRAM_KEY);
+        config["engram_max_ngram_size"] = serde_json::json!(3);
+        config["engram_pad_token_id"] = serde_json::json!(2);
     }
-    std::fs::write(dir.join("token_map.bin"), tb).unwrap();
+    std::fs::write(dir.join("config.json"), serde_json::to_string_pretty(&config).unwrap()).unwrap();
+    if with_engram {
+        std::fs::write(
+            dir.join("engram_constants.json"),
+            serde_json::json!({
+                "multipliers": [1_000_003u64, 2_000_029, 3_000_017],
+                "primes": ENGRAM_PRIMES,
+                "offsets": engram_offsets
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut tb = Vec::new();
+        for t in 0..VOCAB as i32 {
+            let x = if t < 4 { t } else { 4 + (t - 4) / 2 };
+            tb.extend_from_slice(&x.to_le_bytes());
+        }
+        std::fs::write(dir.join("token_map.bin"), tb).unwrap();
+    }
 }
 
 fn load_with_joshua(path: &std::path::Path) -> joshua::model::QuantizedModel {
@@ -369,20 +379,24 @@ fn logits(model: &mut joshua::model::QuantizedModel, tokens: &[u32], offset: usi
 }
 
 fn main() {
-    let tmp = std::env::temp_dir().join("ds4-parity");
+    // PARITY_NO_ENGRAM=1 exercises joshua's no-engram runtime path (REAP
+    // checkpoints ship without the engram tables).
+    let with_engram = std::env::var("PARITY_NO_ENGRAM").is_err();
+    let suffix = if with_engram { "" } else { "-noengram" };
+    let tmp = std::env::temp_dir().join(format!("ds4-parity{suffix}"));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).unwrap();
     let direct_gguf = tmp.join("direct.gguf");
-    write_direct_gguf(&direct_gguf);
+    write_direct_gguf(&direct_gguf, with_engram);
 
     let hf_dir = tmp.join("hf");
-    write_hf_repo(&hf_dir);
+    write_hf_repo(&hf_dir, with_engram);
     let converted = tmp.join("converted.gguf");
     let opts = Options {
         preset: "parity".into(),
-        token_map: Some(hf_dir.join("token_map.bin")),
-        multipliers: Some(hf_dir.join("engram_constants.json")),
-        engram_constants: Some(hf_dir.join("engram_constants.json")),
+        token_map: with_engram.then(|| hf_dir.join("token_map.bin")),
+        multipliers: with_engram.then(|| hf_dir.join("engram_constants.json")),
+        engram_constants: with_engram.then(|| hf_dir.join("engram_constants.json")),
         ..Options::default()
     };
     let summary = convert::run(&hf_dir, &converted, &opts).unwrap();
@@ -406,7 +420,9 @@ fn main() {
     // Arm 2: bisect the production k-quant preset. Each variant quantizes
     // ONE class and leaves everything else F32; a NaN from a variant pins
     // the broken encoder. The last variant is the full balanced preset.
-    {
+    // (Engram-bearing scenario only: the variants reference the engram
+    // constants and the no-engram model has no engram tensors.)
+    if with_engram {
         let all_f32: std::collections::BTreeMap<&'static str, Kind> = [
             ("embd", Kind::F32),
             ("head", Kind::F32),
