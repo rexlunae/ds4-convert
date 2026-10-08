@@ -256,6 +256,7 @@ pub fn load_tokenizer(dir: &std::path::Path, unk_id: i64, cfg: &Config) -> Resul
 pub fn build_metadata(
     cfg: &Config,
     tok: Option<&TokenizerMeta>,
+    engram_present: bool,
     token_map: &[i32],
     multipliers: &[u64],
     primes: &[u64],
@@ -327,7 +328,7 @@ pub fn build_metadata(
         md.push((key("rope.scaling.yarn_beta_slow"), V::F32(rs.get("beta_slow").and_then(|f| f.as_f64()).unwrap_or(1.0) as f32)));
     }
     // Engram.
-    if cfg.has_engram {
+    if cfg.has_engram && engram_present {
         md.push((key("engram.head_count"), V::U32(cfg.engram_n_heads as u32)));
         md.push((key("engram.key_length"), V::U32(num("engram_head_dim", 0) as u32)));
         md.push((key("engram.max_ngram_size"), V::U32(cfg.engram_max_ngram as u32)));
@@ -371,6 +372,8 @@ pub enum Action {
     SkipVision,
     /// MTP draft tensors: skipped unless --keep-mtp.
     SkipMtp,
+    /// An fp8/fp4 `.scale` companion: consumed with its weight tensor.
+    SkipScale,
 }
 
 /// Map an HF tensor name.  Returns None when the name is not part of this
@@ -379,6 +382,9 @@ pub fn map_name(name: &str, cfg: &Config, keep_mtp: bool) -> Option<Action> {
     use Action::*;
     if name.starts_with("vision.") || name.starts_with("aligner.") || name.starts_with("image_") {
         return Some(SkipVision);
+    }
+    if name.ends_with(".scale") {
+        return Some(SkipScale);
     }
     if let Some(rest) = name.strip_prefix("mtp.") {
         if keep_mtp {

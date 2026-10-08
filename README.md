@@ -75,15 +75,28 @@ tested to reproduce the published primes/offsets exactly**; only the numpy
   and once as HF safetensors converted through the converter, and both are
   loaded with joshua's real `deepseek41` loader. All 14 positions × 16
   logits must match to 2e-5. `cd tests/parity && cargo run --release`.
+- **Real-data validation (2026-10-07)**: expert-0 of layer 0 of the official
+  `DeepSeek-V4.1-Flash` checkpoint — 20 rows × 5120 fp4 values, dequantized
+  here — matches the lossless MXFP4 repack in the published
+  vcruz305/DeepSeek-V4.1-Flash-GGUF Q8_0 file **exactly: 102400/102400
+  (100.00%)**. The wrong nibble hypotheses score 9–15%. The FP4 packing
+  convention (sequential, element 2i in the low nibble, 2i+1 in the high
+  one; E8M0 biased-127 scales per 32 elements) is confirmed against the
+  reference implementation.
 
 ## Known limits
 
 - Down-projections land on Q4_K rather than the published Q3_K_S (same
   decoder family, ~9% larger); `--down-quant q2_k` if size matters more.
-- FP4 nibble order defaults to low-nibble-first (the common GPTQ-style
-  packing); `--fp4-high-first` flips it. Validate one real conversion
-  against a known-good generation before trusting a new checkpoint family.
+- FP4 nibble order defaults to sequential low-nibble-first — **validated
+  exactly** against the reference implementation for the
+  DeepSeek-V4.1-Flash family (see Verification). `--fp4-high-first` flips
+  it for a different checkpoint family.
 - The numpy multipliers for the engram hash are embedded, not regenerated.
+- Checkpoints that prune the engram tables (e.g. REAP-272E) convert as
+  no-engram models: the `{arch}.engram.*` metadata keys are written only
+  when the engram tensors are actually present, so joshua's loader runs
+  the model without the n-gram lookup.
 
 ## License
 

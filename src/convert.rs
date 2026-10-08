@@ -170,9 +170,7 @@ fn dequant_chunk(
                 bail!("scale row {sr} out of range ({srows})");
             }
             for c in 0..cols {
-                let sc = sb[sr * scols + c / bc] as usize;
                 out[r * cols + c] *= f32_from_e8m0(sb[sr * scols + (c / bc).min(scols - 1)]);
-                let _ = sc;
             }
         }
     }
@@ -198,6 +196,7 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
                 stacks.entry((layer, which)).or_default().push((eid, name.clone()));
             }
             Some(Action::SkipVision) => skipped_vision += 1,
+            Some(Action::SkipScale) => skipped_scales += 1,
             Some(Action::SkipMtp) => skipped_mtp += 1,
             None => {
                 if opts.allow_unmapped {
@@ -208,12 +207,23 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
             }
         }
     }
-    for name in model.names() {
-        if name.ends_with(".scale") {
-            skipped_scales += 1;
-        }
+    // The engram constants ship only when the checkpoint actually carries
+    // the engram tensors (REAP prunes them; the official checkpoint keeps
+    // them).  A config that advertises engram layers without the tensors
+    // converts as a no-engram model — joshua's loader runs V4.1 happily
+    // without `.engram.layer_ids`.
+    let engram_present = cfg.has_engram
+        && cfg.engram_layer_ids.iter().all(|&l| {
+            ["engram_embd", "engram_wkv", "engram_q", "engram_k"]
+                .iter()
+                .all(|t| model.has(&format!("layers.{l}.{t}.weight")))
+        });
+    if cfg.has_engram && !engram_present {
+        eprintln!(
+            "note: config advertises engram layers {:?} but the checkpoint has no engram tensors; writing a no-engram model",
+            cfg.engram_layer_ids
+        );
     }
-    skipped_vision = skipped_vision.saturating_sub(skipped_scales);
 
     // Tokenizer + engram constants.
     let tok = if dir.join("tokenizer.json").exists() {
@@ -221,49 +231,49 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
     } else {
         None
     };
-    let token_map = hfmap::load_token_map(opts.token_map.as_deref())?;
-    if token_map.len() != cfg.vocab {
-        bail!(
-            "token map has {} entries but vocab is {} (provide --token-map)",
-            token_map.len(),
-            cfg.vocab
-        );
-    }
-    if let Some(expected) = cfg.engram_compressed_vocab {
-        let distinct: std::collections::HashSet<i32> = token_map.iter().copied().collect();
-        if distinct.len() as u64 != expected {
+    let (token_map, multipliers, primes, offsets) = if engram_present {
+        let token_map = hfmap::load_token_map(opts.token_map.as_deref())?;
+        if token_map.len() != cfg.vocab {
             bail!(
-                "token map collapses to {} ids, config says {expected} (wrong --token-map?)",
-                distinct.len()
+                "token map has {} entries but vocab is {} (provide --token-map)",
+                token_map.len(),
+                cfg.vocab
             );
         }
-    }
-    let multipliers: Vec<u64> = match &opts.multipliers {
-        Some(p) => {
-            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(p)?)?;
-            v.get("multipliers")
-                .and_then(|m| m.as_array())
-                .ok_or_else(|| anyhow!("--multipliers: no multipliers array"))?
-                .iter()
-                .filter_map(|x| x.as_u64())
-                .collect()
+        if let Some(expected) = cfg.engram_compressed_vocab {
+            let distinct: std::collections::HashSet<i32> = token_map.iter().copied().collect();
+            if distinct.len() as u64 != expected {
+                bail!(
+                    "token map collapses to {} ids, config says {expected} (wrong --token-map?)",
+                    distinct.len()
+                );
+            }
         }
-        None => hfmap::default_multipliers()?,
-    };
-    let (primes, offsets) = match &opts.engram_constants {
-        Some(p) => {
-            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(p)?)?;
-            let gp = |k: &str| -> Vec<u64> {
-                v.get(k)
+        let multipliers: Vec<u64> = match &opts.multipliers {
+            Some(p) => {
+                let v: serde_json::Value = serde_json::from_slice(&std::fs::read(p)?)?;
+                v.get("multipliers")
                     .and_then(|m| m.as_array())
-                    .map(|a| a.iter().filter_map(|x| x.as_u64()).collect())
-                    .unwrap_or_default()
-            };
-            (gp("primes"), gp("offsets"))
-        }
-        None => hfmap::compute_primes_offsets(&cfg)?,
-    };
-    if cfg.has_engram {
+                    .ok_or_else(|| anyhow!("--multipliers: no multipliers array"))?
+                    .iter()
+                    .filter_map(|x| x.as_u64())
+                    .collect()
+            }
+            None => hfmap::default_multipliers()?,
+        };
+        let (primes, offsets) = match &opts.engram_constants {
+            Some(p) => {
+                let v: serde_json::Value = serde_json::from_slice(&std::fs::read(p)?)?;
+                let gp = |k: &str| -> Vec<u64> {
+                    v.get(k)
+                        .and_then(|m| m.as_array())
+                        .map(|a| a.iter().filter_map(|x| x.as_u64()).collect())
+                        .unwrap_or_default()
+                };
+                (gp("primes"), gp("offsets"))
+            }
+            None => hfmap::compute_primes_offsets(&cfg)?,
+        };
         let need_m = cfg.engram_layer_ids.len() * cfg.engram_max_ngram;
         let need_p = cfg.engram_layer_ids.len() * (cfg.engram_max_ngram - 1) * cfg.engram_n_heads;
         if multipliers.len() != need_m {
@@ -272,8 +282,11 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
         if primes.len() != need_p || offsets.len() != need_p {
             bail!("engram primes/offsets: {}/{} entries, need {need_p}", primes.len(), offsets.len());
         }
-    }
-    let metadata = hfmap::build_metadata(&cfg, tok.as_ref(), &token_map, &multipliers, &primes, &offsets);
+        (token_map, multipliers, primes, offsets)
+    } else {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+    };
+    let metadata = hfmap::build_metadata(&cfg, tok.as_ref(), engram_present, &token_map, &multipliers, &primes, &offsets);
 
     // Row chunking: multiples of 512 rows so every scale block (32) and the
     // quant blocks stay row-aligned.
@@ -312,7 +325,10 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
         if m.shape.len() != 2 {
             bail!("expert tensor {sample} is not 2D: {:?}", m.shape);
         }
-        let mut dims: Vec<u64> = m.shape.iter().map(|&d| d as u64).collect();
+        // fp4 experts are I8-packed along the input dim: two E2M1 values per
+        // byte, so the stacked GGUF dims use the logical (unpacked) width.
+        let logical0 = if m.dtype == StDType::I8 { m.shape[1] * 2 } else { m.shape[1] };
+        let mut dims: Vec<u64> = vec![m.shape[0] as u64, logical0 as u64];
         dims.insert(0, cfg.n_expert as u64);
         let class = if which == 2 { Class::Down } else { Class::Experts };
         let kind = opts.kind_for(class)?;
@@ -351,42 +367,58 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
     let total_tensors = direct.len() + stacks.len();
 
     // Chunked 2D writer: reads weight rows + scale rows, dequantizes, encodes.
-    #[allow(clippy::too_many_arguments)]
+    // The scale block shape is derived from the tensors themselves:
+    // `br = rows / scale_rows`, `bc = logical_cols / scale_cols` — which
+    // covers both the dense [32, 32] convention (wq_a: scale (40, 160) over
+    // (1280, 5120)) and the experts' per-row fp4 scales ((2304, 160) over
+    // (2304, 5120 logical)).
     fn write_chunked(
         w: &mut Writer,
         model: &mut Model,
         hf: &str,
         kind: Kind,
-        cols: usize,
-        fp4: bool,
         fp4_high_first: bool,
-        br: usize,
-        bc: usize,
         chunk_rows: usize,
-        rows_total: usize,
     ) -> Result<()> {
         let sb_name = hf.replace(".weight", ".scale");
         let has_scale = model.has(&sb_name);
-        let scols = if has_scale { *model.meta(&sb_name)?.shape.last().unwrap() } else { 0 };
+        let m = model.meta(hf)?.clone();
+        let rows_total = m.shape[0];
+        let byte_cols = m.shape[1];
+        let logical = if m.dtype == StDType::I8 { byte_cols * 2 } else { byte_cols };
+        let (srows, scols, br, bc) = if has_scale {
+            let sm = model.meta(&sb_name)?.clone();
+            let srows = sm.shape[0];
+            let scols = *sm.shape.last().unwrap();
+            if rows_total % srows != 0 || logical % scols != 0 {
+                bail!(
+                    "{hf}: scale {:?} does not tile weight {:?}",
+                    sm.shape,
+                    m.shape
+                );
+            }
+            (srows, scols, rows_total / srows, logical / scols)
+        } else {
+            (0, 0, 0, 0)
+        };
         let per = chunk_rows.min(rows_total.max(1));
         let mut r0 = 0usize;
         while r0 < rows_total {
             let r1 = (r0 + per).min(rows_total);
-            let (dtype_s, shape_c, wb) = model.read_rows(hf, r0, r1)?;
-            let _ = shape_c;
-            let (sb, srows) = if has_scale {
-                let (_, _, sbv) = model.read_rows(&sb_name, r0 / br, r1.div_ceil(br))?;
-                (sbv, r1.div_ceil(br) - r0 / br)
-            } else {
-                (Vec::new(), 0)
-            };
+            let (dtype_s, _, wb) = model.read_rows(hf, r0, r1)?;
             let scale = if has_scale {
-                Some((sb.as_slice(), srows, scols, br, bc, r0))
+                let (_, _, sbv) = model.read_rows(&sb_name, r0 / br, r1.div_ceil(br))?;
+                Some((sbv, r1.div_ceil(br) - r0 / br, scols, br, bc, r0))
             } else {
                 None
             };
-            let vals = dequant_chunk(dtype_s, &wb, r1 - r0, cols, scale, fp4_high_first)?;
-            let (_id, bytes) = crate::quant::encode(kind, &[r1 - r0, cols], &vals)?;
+            let vals = match &scale {
+                Some((sb, srows_c, scols_c, br_c, bc_c, r0_c)) => {
+                    dequant_chunk(dtype_s, &wb, r1 - r0, logical, Some((sb, *srows_c, *scols_c, *br_c, *bc_c, *r0_c)), fp4_high_first)?
+                }
+                None => dequant_chunk(dtype_s, &wb, r1 - r0, logical, None, fp4_high_first)?,
+            };
+            let (_id, bytes) = crate::quant::encode(kind, &[r1 - r0, logical], &vals)?;
             w.push(&bytes)?;
             r0 = r1;
         }
@@ -401,25 +433,17 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
         let cols = *m.shape.last().ok_or_else(|| anyhow!("{hf}: empty"))?;
         let rows = m.shape[0];
         let fp4 = m.dtype == StDType::I8;
-        if m.shape.len() == 2 && (fp4 || m.dtype == StDType::F8E4M3 || m.dtype == StDType::BF16) {
-            // Chunked.  Engram tables carry a per-row scale (br = 1); every
-            // other block-scaled tensor uses the config's [32, 32] blocks.
+        let _ = (&cols, &rows, &fp4, &class);
+        if m.shape.len() == 2
+            && (fp4 || m.dtype == StDType::F8E4M3 || m.dtype == StDType::BF16)
+            && m.shape[0] * m.shape[1] > 4_000_000
+        {
+            // Chunked for anything sizable; the scale tiling is derived from
+            // the tensors inside write_chunked.
             if is_stack {
                 bail!("{gname}: unexpected stacked tensor among direct emits");
             }
-            let br_final = if class == Class::EngramTable { 1 } else { cfg.qblock.0 };
-            let bc_final = if class == Class::EngramTable {
-                let sb_name = hf.replace(".weight", ".scale");
-                if model.has(&sb_name) {
-                    let scols = *model.meta(&sb_name)?.shape.last().unwrap();
-                    cols / scols
-                } else {
-                    1
-                }
-            } else {
-                cfg.qblock.1
-            };
-            write_chunked(&mut w, &mut model, hf, kind, cols, fp4, opts.fp4_high_first, br_final, bc_final, chunk_rows(cols), rows)?;
+            write_chunked(&mut w, &mut model, hf, kind, opts.fp4_high_first, chunk_rows(m.shape[1]))?;
         } else {
             // Whole-tensor path (small tensors: norms, biases, tiny tables).
             let (dtype_s, shape_c, bytes) = model.read_tensor(hf)?;
@@ -444,15 +468,18 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
         for (_eid, name) in &sorted {
             let m = model.meta(name)?.clone();
             let rows = m.shape[0];
-            let cols = m.shape[1];
+            let logical = if m.dtype == StDType::I8 { m.shape[1] * 2 } else { m.shape[1] };
             let sb_name = name.replace(".weight", ".scale");
             let has_scale = model.has(&sb_name);
             let (srows, scols) = if has_scale {
                 let sm = model.meta(&sb_name)?;
-                (sm.rows(), *sm.shape.last().unwrap())
+                (sm.shape[0], *sm.shape.last().unwrap())
             } else {
                 (0, 0)
             };
+            if has_scale && (srows != rows || logical % scols != 0) {
+                bail!("{name}: scale ({srows}, {scols}) does not tile ({rows}, {logical})");
+            }
             let (_dt, _, wb) = model.read_tensor(name)?;
             let (_, _, sb) = if has_scale {
                 model.read_tensor(&sb_name)?
@@ -463,11 +490,11 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
                 m.dtype,
                 &wb,
                 rows,
-                cols,
-                if has_scale { Some((&sb, srows, scols, cfg.qblock.0, cfg.qblock.1, 0)) } else { None },
+                logical,
+                if has_scale { Some((&sb, srows, scols, rows / srows, logical / scols, 0)) } else { None },
                 opts.fp4_high_first,
             )?;
-            let (_id, bytes) = crate::quant::encode(kind, &[rows, cols], &vals)?;
+            let (_id, bytes) = crate::quant::encode(kind, &[rows, logical], &vals)?;
             w.push(&bytes)?;
         }
         done += 1;
