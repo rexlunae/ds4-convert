@@ -112,7 +112,29 @@ impl Model {
                     seen.insert(path.join(shard));
                 }
             }
-            shard_paths.extend(seen);
+            // A stale index can reference shards that are not in the repo
+            // (e.g. REAP-272E ships the official index; its engram-only
+            // shards 47/48 were pruned).  Skip missing files with a warning.
+            let n_before = seen.len();
+            let mut existing = std::collections::BTreeSet::new();
+            for p in seen {
+                if p.exists() {
+                    existing.insert(p);
+                } else {
+                    eprintln!(
+                        "warning: index references {} but the file is absent; tensors assigned to it are unavailable",
+                        p.display()
+                    );
+                }
+            }
+            if existing.len() != n_before {
+                eprintln!(
+                    "note: {} of {} index shards present",
+                    existing.len(),
+                    n_before
+                );
+            }
+            shard_paths.extend(existing);
         }
 
         let mut files = Vec::new();
