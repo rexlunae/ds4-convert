@@ -193,9 +193,13 @@ fn dequant_chunk(
         if out.len() != rows * cols {
             bail!("dequant: {} values for {rows}x{cols}", out.len());
         }
-        let sr0 = row0 / br;
+        // Chunk-relative scale indexing: the buffer holds scale rows
+        // [row0/br, row0/br + rows/br), and chunk starts (row0) are always
+        // br-aligned (chunk sizes are 512-multiples), so the local scale
+        // row r/br is the global row0/br + r/br.
+        let _ = row0;
         for r in 0..rows {
-            let sr = sr0 + r / br;
+            let sr = r / br;
             if sr >= srows {
                 bail!("scale row {sr} out of range ({srows})");
             }
@@ -438,7 +442,12 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
             let (dtype_s, _, wb) = model.read_rows(hf, r0, r1)?;
             let scale = if has_scale {
                 let (_, _, sbv) = model.read_rows(&sb_name, r0 / br, r1.div_ceil(br))?;
-                Some((sbv, r1.div_ceil(br) - r0 / br, scols, br, bc, r0))
+                // dequant_chunk's bounds check compares the GLOBAL scale row
+                // (row0/br + r/br) against this count, so it must be the
+                // scale tensor's total rows, not the chunk's. With br=1 and
+                // multi-chunk tensors (the 384M-row engram embed) a
+                // chunk-relative count bails on chunk 1's first row.
+                Some((sbv, srows, scols, br, bc, r0))
             } else {
                 None
             };
