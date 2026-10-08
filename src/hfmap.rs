@@ -10,6 +10,9 @@ use crate::ggufw::V;
 
 pub const MULTIPLIERS_ASSET: &[u8] = include_bytes!("../assets/engram_constants.json");
 pub const TOKEN_MAP_ASSET: &[u8] = include_bytes!("../assets/token_map_v41_flash.bin");
+/// The V4 / V4.1-Flash chat template, as embedded in the published
+/// `deepseek41` GGUFs (the HF repos ship none).
+pub const CHAT_TEMPLATE_ASSET: &[u8] = include_bytes!("../assets/chat_template_v41.jinja");
 
 pub struct Config {
     pub arch: &'static str,
@@ -193,6 +196,8 @@ pub struct TokenizerMeta {
     pub merges: Vec<String>,
     pub token_types: Vec<i32>,
     pub chat_template: Option<String>,
+    /// `tokenizer.ggml.pre` (the real files carry `joyai-llm`).
+    pub pre: String,
 }
 
 pub fn load_tokenizer(dir: &std::path::Path, unk_id: i64, cfg: &Config) -> Result<TokenizerMeta> {
@@ -256,7 +261,7 @@ pub fn load_tokenizer(dir: &std::path::Path, unk_id: i64, cfg: &Config) -> Resul
         .and_then(|tc| tc.get("chat_template").and_then(|c| c.as_str()).map(String::from));
 
     let _ = cfg;
-    Ok(TokenizerMeta { tokens, merges, token_types, chat_template })
+    Ok(TokenizerMeta { tokens, merges, token_types, chat_template, pre: "joyai-llm".to_string() })
 }
 
 /// Build the full GGUF metadata list.
@@ -353,6 +358,11 @@ pub fn build_metadata(
     // Tokenizer.
     if let Some(t) = tok {
         md.push(("tokenizer.ggml.model".into(), V::Str("gpt2".into())));
+        md.push((
+            "tokenizer.ggml.pre".into(),
+            V::Str(t.pre.clone()),
+        ));
+        md.push(("tokenizer.chat_template".into(), V::Str(String::from_utf8_lossy(CHAT_TEMPLATE_ASSET).into_owned())));
         md.push(("tokenizer.ggml.tokens".into(), V::Arr(t.tokens.iter().map(|s| V::Str(s.clone())).collect())));
         md.push(("tokenizer.ggml.scores".into(), V::Arr(t.tokens.iter().map(|_| V::F32(0.0)).collect())));
         md.push(("tokenizer.ggml.token_type".into(), V::Arr(t.token_types.iter().map(|&x| V::I32(x)).collect())));
