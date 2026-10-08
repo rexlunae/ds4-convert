@@ -385,16 +385,51 @@ fn main() {
     let summary = convert::run(&hf_dir, &converted, &opts).unwrap();
     println!("converted: {} tensors, {} bytes", summary.tensors_out, summary.bytes_out);
 
-    let tokens: [u32; 14] = [1, 4, 2, 7, 5, 9, 3, 6, 8, 4, 1, 12, 13, 5];
-    let mut a = load_with_joshua(&direct_gguf);
-    let mut b = load_with_joshua(&converted);
-    for (pos, tok) in tokens.iter().enumerate() {
-        let la = logits(&mut a, &[*tok], pos);
-        let lb = logits(&mut b, &[*tok], pos);
-        for (i, (x, y)) in la.iter().zip(&lb).enumerate() {
-            assert!((x - y).abs() < 2e-5, "position {pos} logit {i} diverges: {x} vs {y}");
+    // Arm 1: lossless F32 preset - exact parity.
+    {
+        let mut a = load_with_joshua(&direct_gguf);
+        let mut b = load_with_joshua(&converted);
+        for (pos, tok) in tokens.iter().enumerate() {
+            let la = logits(&mut a, &[*tok], pos);
+            let lb = logits(&mut b, &[*tok], pos);
+            for (i, (x, y)) in la.iter().zip(&lb).enumerate() {
+                assert!((x - y).abs() < 2e-5, "f32: position {pos} logit {i} diverges: {x} vs {y}");
+            }
         }
+        let n = logits(&mut a, &[tokens[0]], 0).len();
+        println!("f32 parity OK: {} positions x {n} logits match", tokens.len());
     }
-    let n = logits(&mut a, &[tokens[0]], 0).len();
-    println!("parity OK: {} positions x {n} logits match", tokens.len());
+    // Arm 2: production k-quant preset - every tensor requantized to
+    // Q2_K/Q4_K/Q8_0/BF16 through the real encoders, decoded by joshua's
+    // real candle decoders. Tolerance = encoder quantization noise.
+    {
+        let converted_k = tmp.join("converted-kquant.gguf");
+        let opts = Options {
+            preset: "balanced".into(),
+            token_map: Some(hf_dir.join("token_map.bin")),
+            multipliers: Some(hf_dir.join("engram_constants.json")),
+            engram_constants: Some(hf_dir.join("engram_constants.json")),
+            ..Options::default()
+        };
+        convert::run(&hf_dir, &converted_k, &opts).unwrap();
+        let mut a = load_with_joshua(&direct_gguf);
+        let mut b = load_with_joshua(&converted_k);
+        let mut worst = 0.0f32;
+        for (pos, tok) in tokens.iter().enumerate() {
+            let la = logits(&mut a, &[*tok], pos);
+            let lb = logits(&mut b, &[*tok], pos);
+            for (i, (x, y)) in la.iter().zip(&lb).enumerate() {
+                assert!(
+                    x.is_finite() && y.is_finite(),
+                    "k-quant: position {pos} logit {i} non-finite: {x} vs {y}"
+                );
+                worst = worst.max((x - y).abs());
+                assert!(
+                    (x - y).abs() < 0.35,
+                    "k-quant: position {pos} logit {i} diverges: {x} vs {y}"
+                );
+            }
+        }
+        println!("k-quant parity OK (worst |dlogit| = {worst:.4})");
+    }
 }
