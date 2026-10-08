@@ -214,9 +214,9 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
     // without `.engram.layer_ids`.
     let engram_present = cfg.has_engram
         && cfg.engram_layer_ids.iter().all(|&l| {
-            ["engram_embd", "engram_wkv", "engram_q", "engram_k"]
+            ["engram.embed.weight", "engram.wkv.weight", "engram.q_weight", "engram.k_weight"]
                 .iter()
-                .all(|t| model.has(&format!("layers.{l}.{t}.weight")))
+                .all(|t| model.has(&format!("layers.{l}.{t}")))
         });
     if cfg.has_engram && !engram_present {
         eprintln!(
