@@ -17,7 +17,7 @@ fn main() {
     }];
     let md: Vec<(String, ds4_convert::ggufw::V)> = vec![("general.architecture".to_string(), ds4_convert::ggufw::V::Str("test".into()))];
     let out = "/tmp/sbs2.gguf";
-    let mut w = ds4_convert::ggufw::Writer::create(std::path::Path::new(out), &md, plan.to_vec()).unwrap();
+    let mut w = ds4_convert::ggufw::Writer::create(std::path::Path::new(out), &md, plan.into_iter().collect()).unwrap();
     w.push(&bytes).unwrap();
     w.finish().unwrap();
 
