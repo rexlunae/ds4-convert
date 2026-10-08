@@ -437,12 +437,13 @@ pub fn run(input: &Path, out: &Path, opts: &Options) -> Result<Summary> {
         let rows = m.shape[0];
         let fp4 = m.dtype == StDType::I8;
         let _ = (&cols, &rows, &fp4, &class);
-        if m.shape.len() == 2
-            && (fp4 || m.dtype == StDType::F8E4M3 || m.dtype == StDType::BF16)
-            && m.shape[0] * m.shape[1] > 4_000_000
-        {
-            // Chunked for anything sizable; the scale tiling is derived from
-            // the tensors inside write_chunked.
+        // Route ANY 2-D fp8/fp4 tensor through the chunked path — however
+        // small — so its E8M0 scale companion is always applied. (A size
+        // threshold here silently dropped scales from small fp8 tensors
+        // like attn_kv [512, 5120], corrupting their magnitudes.)
+        if m.shape.len() == 2 && (fp4 || m.dtype == StDType::F8E4M3) {
+            // Chunked; the scale tiling is derived from the tensors inside
+            // write_chunked.
             if is_stack {
                 bail!("{gname}: unexpected stacked tensor among direct emits");
             }
