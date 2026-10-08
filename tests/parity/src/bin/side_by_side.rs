@@ -35,7 +35,7 @@ fn main() {
     let n_diff = candle_vals
         .iter()
         .zip(&mine)
-        .filter(|(a, b)| (a - b).abs() > 1e-6)
+        .filter(|(a, b)| (**a - **b).abs() > 1e-6)
         .count();
     println!(
         "differing elements: {}/{} (candle min {} max {})",
