@@ -98,7 +98,11 @@ impl Options {
             },
             Class::HcFn | Class::EngramTable | Class::EngramQk => match self.preset.as_str() {
                 "parity" => Kind::F32,
-                _ => Kind::F16,
+                // The published V4.1 GGUFs quantize the multi-hundred-GB
+                // engram table to Q2_K (196 GB would not fit otherwise)
+                // and joshua's quantized-row gather handles it; the small
+                // q/k projections follow.
+                _ => Kind::Q2K,
             },
         };
         let slot: &'static str = match class {
