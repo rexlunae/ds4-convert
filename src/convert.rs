@@ -61,14 +61,21 @@ impl Options {
         }
         let preset = match class {
             Class::StaticF32 => Kind::F32,
-            Class::Router => Kind::BF16,
-            Class::Embd => Kind::Q2K,
+            Class::Router => match self.preset.as_str() {
+                "parity" => Kind::F32,
+                _ => Kind::BF16,
+            },
+            Class::Embd => match self.preset.as_str() {
+                "parity" => Kind::F32,
+                _ => Kind::Q2K,
+            },
             Class::Head => match self.preset.as_str() {
                 "size" => Kind::Q4K,
+                "parity" => Kind::F32,
                 _ => Kind::Q8_0,
             },
             Class::Down => match self.preset.as_str() {
-                "size" => Kind::Q2K,
+                "size" | "parity" => Kind::Q2K,
                 _ => Kind::Q4K,
             },
             Class::Dense | Class::Experts | Class::HcFn | Class::EngramTable | Class::EngramQk => {
