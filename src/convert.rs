@@ -70,9 +70,9 @@ impl Options {
                 "size" => Kind::Q4K,
                 "parity" => Kind::F32,
                 _ => Kind::Q8_0,
-            },
             Class::Down => match self.preset.as_str() {
-                "size" | "parity" => Kind::Q2K,
+                "size" => Kind::Q2K,
+                "parity" => Kind::F32,
                 _ => Kind::Q4K,
             },
             Class::Dense | Class::Experts | Class::HcFn | Class::EngramTable | Class::EngramQk => {
