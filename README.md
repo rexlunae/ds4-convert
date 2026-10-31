@@ -92,6 +92,14 @@ tested to reproduce the published primes/offsets exactly**; only the numpy
   exactly** against the reference implementation for the
   DeepSeek-V4.1-Flash family (see Verification). `--fp4-high-first` flips
   it for a different checkpoint family.
+- **Regenerate GGUFs converted before the FP4 nibble fix.** Until then
+  `unpack_fp4` implemented the opposite of the documented order: it read
+  element 2i from the *high* nibble, despite the low-nibble-first
+  validation above. Every routed expert in those files has each pair of
+  adjacent input columns swapped. The model loads and runs, but decodes
+  garbage (rexlunae/joshua#175). Dense, FP8, router, embedding and head
+  tensors are unaffected. `fp4_unpacks_low_nibble_first_by_default` now pins
+  the order.
 - The numpy multipliers for the engram hash are embedded, not regenerated.
 - Checkpoints that prune the engram tables (e.g. REAP-272E) convert as
   no-engram models: the `{arch}.engram.*` metadata keys are written only

@@ -85,7 +85,8 @@ pub fn unpack_fp4(packed: &[u8], out: &mut [f32], high_first: bool) {
     assert!(out.len() <= packed.len() * 2, "fp4: {} elems > {} bytes", out.len(), packed.len());
     for (i, v) in out.iter_mut().enumerate() {
         let byte = packed[i / 2];
-        let nib = if high_first != (i % 2 == 1) { byte & 0xF } else { byte >> 4 };
+        // Odd elements take the high nibble unless the order is flipped.
+        let nib = if (i % 2 == 1) != high_first { byte >> 4 } else { byte & 0xF };
         *v = e2m1(nib);
     }
 }
