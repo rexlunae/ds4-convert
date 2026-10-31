@@ -133,3 +133,21 @@ fn f16_bf16_round_trip() {
         }
     }
 }
+
+#[test]
+fn fp4_unpacks_low_nibble_first_by_default() {
+    use ds4_convert::dtypes::unpack_fp4;
+    // E2M1 codes: 1 = 0.5, 2 = 1.0, 7 = 6.0, 9 = -0.5 (sign bit 3).
+    // Byte 0x21 holds code 1 in the low nibble and code 2 in the high one;
+    // byte 0x97 holds 7 low and 9 high.
+    let packed = [0x21u8, 0x97];
+    let mut out = [0f32; 4];
+    unpack_fp4(&packed, &mut out, false);
+    assert_eq!(out, [0.5, 1.0, 6.0, -0.5], "element 2i is the low nibble");
+    unpack_fp4(&packed, &mut out, true);
+    assert_eq!(out, [1.0, 0.5, -0.5, 6.0], "--fp4-high-first swaps each pair");
+    // An odd element count reads only the low nibble of the last byte.
+    let mut three = [0f32; 3];
+    unpack_fp4(&packed, &mut three, false);
+    assert_eq!(three, [0.5, 1.0, 6.0]);
+}
